@@ -27,8 +27,13 @@ import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.*;
 import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
+import net.minecraft.world.entity.ai.goal.target.OwnerHurtByTargetGoal;
+import net.minecraft.world.entity.ai.goal.target.OwnerHurtTargetGoal;
 import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
+import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
+import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.animal.Cow;
+import net.minecraft.world.entity.animal.frog.Frog;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
@@ -69,6 +74,20 @@ public class GammaroachEntity extends PathfinderMob implements IAnimatedEntity {
         this.goalSelector.addGoal(4, new RandomLookAroundGoal(this));
         this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
         this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, LivingEntity.class, 20, false, true, IRRADIATED_TARGET));
+        this.goalSelector.addGoal(1, new SitWhenOrderedToGoal(this));
+        this.goalSelector.addGoal(2, new AnimalFollowOwnerGoal(this, 1.0D, 5.0F, 2.0F, false) {
+            @Override
+            public boolean shouldFollow() {
+                return GammaroachEntity.this.getCommand() == 2;
+            }
+
+            @Override
+            public void tickDistance(float distanceTo) {
+                GammaroachEntity.this.setRunning(distanceTo > 5);
+            }
+        });
+        this.targetSelector.addGoal(3, new OwnerHurtByTargetGoal(this));
+        this.targetSelector.addGoal(4, new OwnerHurtTargetGoal(this));
     }
 
     public static boolean isValidLightLevel(ServerLevelAccessor levelAccessor, BlockPos blockPos, RandomSource randomSource) {
@@ -112,7 +131,7 @@ public class GammaroachEntity extends PathfinderMob implements IAnimatedEntity {
     }
 
     public static AttributeSupplier.Builder createAttributes() {
-        return Monster.createMonsterAttributes().add(Attributes.MOVEMENT_SPEED, 0.4D).add(Attributes.MAX_HEALTH, 14.0D).add(Attributes.ATTACK_DAMAGE, 2);
+        return Monster.createMonsterAttributes().add(Attributes.MOVEMENT_SPEED, 0.4D).add(Attributes.MAX_HEALTH, 14.0D).add(Attributes.ATTACK_DAMAGE, 2).add(Attributes.FOLLOW_RANGE, 32.0D);
     }
 
     public boolean canBeAffected(MobEffectInstance effectInstance) {
@@ -153,6 +172,18 @@ public class GammaroachEntity extends PathfinderMob implements IAnimatedEntity {
 
             }
         }
+        LivingEntity target = this.getTarget();
+        if (this.getHealth() < this.getMaxHealth() * 0.45F && this.isTame() && this.getHideFor() <= 0) {
+            int i = 80 + random.nextInt(40);
+            this.setHideFor(i);
+            this.fleeFromPosition = target.position();
+            this.fleeTicks = i;
+            if (target instanceof Mob mob) {
+                mob.setTarget(null);
+                mob.setLastHurtByMob(null);
+                mob.setLastHurtMob(null);
+                }
+            }
         AnimationHandler.INSTANCE.updateAnimations(this);
     }
 
@@ -228,16 +259,23 @@ public class GammaroachEntity extends PathfinderMob implements IAnimatedEntity {
     public float getStepHeight() {
         return 1.1F;
     }
+    public boolean isFood(ItemStack stack) {
+    return this.isTame() && stack.is(ACItemRegistry.SOYLENT_GREEN.get());
+    }
 
     @Override
     public InteractionResult mobInteract(Player player, InteractionHand hand) {
         InteractionResult prev = super.mobInteract(player, hand);
         if (prev != InteractionResult.SUCCESS) {
             ItemStack itemStack = player.getItemInHand(hand);
-            if (itemStack.is(ACItemRegistry.SPELUNKIE.get()) && (!level().isClientSide && this.getTarget() == player || !isFed())) {
+            if (itemStack.is(ACItemRegistry.SPELUNKIE.get()) && !this.isTame() && (!level().isClientSide && this.getTarget() == player || !isFed())) {
                 if (!player.getAbilities().instabuild) {
                     itemStack.shrink(1);
                 }
+                this.heal(5);
+                this.tame(player);
+                this.setCommand(1);
+                this.setOrderedToSit(true);
                 this.setFed(true);
                 this.setLastHurtByMob(null);
                 this.setTarget(null);
@@ -246,6 +284,10 @@ public class GammaroachEntity extends PathfinderMob implements IAnimatedEntity {
             }
         }
         return prev;
+    }
+    }
+    public boolean canOwnerCommand(Player ownerPlayer) {
+        return true;
     }
 
     public void handleEntityEvent(byte b) {
